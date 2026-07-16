@@ -1,0 +1,36 @@
+[package]
+name = "jellyfin-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# HTTP client for talking to the Jellyfin server
+# Pinned to 0.11 + rustls: newer reqwest / the native-tls path both pull
+# transitive deps that need a newer rustc than this sandbox's apt-installed
+# 1.75. Bump this once you're building with a recent stable toolchain
+# (rustup-installed, not apt's).
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+# (de)serializing Jellyfin's JSON into/from Rust structs
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# async runtime — reqwest and eventually mpv/sway IPC all want one
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# error handling — .context()/? ergonomics without a heavy dep tree
+anyhow = "1"
+# finds the right XDG config dir on Linux to store server URL + token
+directories = "5"
+# config file (de)serialization
+toml = "0.8"
+
+# Transitive deps of reqwest/url — pinned old because this sandbox's apt-installed
+# cargo (1.75) predates edition2024, which newer releases of these require.
+# Not something jellyfin-tui code calls directly; safe to unpin on a newer toolchain.
+idna_adapter = "=1.1.0"
+indexmap = "=2.2.6"
+unicode-segmentation = "=1.11.0"
+
+# Terminal UI
+ratatui = "0.26"
+crossterm = "0.27"
+
+# Later phases will add: mpvipc, swayipc
