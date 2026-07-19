@@ -110,6 +110,24 @@ pub struct ItemsResponse<T> {
     pub total_record_count: u32,
 }
 
+/// Playback state sent to Jellyfin while mpv is running. Jellyfin uses
+/// these reports to update the user's resume point and watched status.
+#[derive(Debug, Serialize)]
+pub struct PlaybackReport<'a> {
+    #[serde(rename = "ItemId")]
+    pub item_id: &'a str,
+    #[serde(rename = "PositionTicks")]
+    pub position_ticks: i64,
+    #[serde(rename = "IsPaused")]
+    pub is_paused: bool,
+    #[serde(rename = "IsMuted")]
+    pub is_muted: bool,
+    #[serde(rename = "CanSeek")]
+    pub can_seek: bool,
+    #[serde(rename = "PlayMethod")]
+    pub play_method: &'static str,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,8 +206,27 @@ mod tests {
 
         let item: Item = serde_json::from_str(json).expect("should deserialize");
         let streams = item.media_streams.expect("MediaStreams should be present");
-        let subtitle_count = streams.iter().filter(|s| s.stream_type == "Subtitle").count();
+        let subtitle_count = streams
+            .iter()
+            .filter(|s| s.stream_type == "Subtitle")
+            .count();
         assert_eq!(subtitle_count, 2);
     }
-}
 
+    #[test]
+    fn playback_report_uses_jellyfin_field_names() {
+        let report = PlaybackReport {
+            item_id: "abc123",
+            position_ticks: 300_000_000,
+            is_paused: false,
+            is_muted: false,
+            can_seek: true,
+            play_method: "DirectPlay",
+        };
+
+        let value = serde_json::to_value(report).expect("should serialize");
+        assert_eq!(value["ItemId"], "abc123");
+        assert_eq!(value["PositionTicks"], 300_000_000);
+        assert_eq!(value["PlayMethod"], "DirectPlay");
+    }
+}

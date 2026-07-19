@@ -21,6 +21,8 @@ making it your daily driver.
   picking once
 - Watched-state at a glance: ✅ for watched, a percentage for in-progress,
   and `m` to toggle manually
+- Playback progress is reported to Jellyfin while mpv runs and when it
+  closes, so later sessions resume from the server's updated position
 - One-time login: server URL and a revocable access token persist between
   runs — your password is never stored
 
@@ -29,8 +31,8 @@ making it your daily driver.
 - A Jellyfin server you have an account on
 - mpv installed and on your `PATH`
 - A Rust toolchain (see [Toolchain notes](#toolchain-notes))
-- Linux is the development target; other platforms are untested (the code
-  avoids Linux-only APIs, so reports/patches are welcome)
+- Linux is the development target; playback progress currently uses mpv's
+  Unix-socket IPC, so non-Unix platforms are unsupported for now
 
 ## Installation
 
@@ -124,10 +126,14 @@ item id. Deleting it just means the picker comes back on next play.
   and streams the original file (`static=true`). If a file can't be played
   as-is (unsupported codec/container, insufficient bandwidth), playback
   fails where official clients would fall back to transcoding.
-- **No progress reporting yet.** jammy doesn't tell the server where you
-  stopped, so resume positions and watched state only reflect what *other*
-  clients reported. Finishing something doesn't auto-mark it watched —
-  press `m`.
+- Playback state is sampled from mpv once per second and reported to
+  Jellyfin every ten seconds and when mpv closes. If jammy itself is killed
+  abruptly, the server may retain the most recent periodic update rather
+  than the exact stopping point.
+- Jellyfin applies its own server-side resume thresholds (commonly 5%–90%
+  for videos at least five minutes long). Positions below the minimum are
+  deliberately stored as zero, so a short smoke test may restart from the
+  beginning even though jammy's reports arrived successfully.
 - **mpv owns the screen while playing.** The TUI pauses until mpv exits;
   there's no pause/seek/stop control from within jammy yet.
 - **Text-only UI** — no posters or thumbnails.
@@ -138,9 +144,6 @@ item id. Deleting it just means the picker comes back on next play.
 
 Roughly in priority order:
 
-- Report playback progress to Jellyfin (`/Sessions/Playing/*`), driven by
-  mpv IPC (`--input-ipc-server`) — this unlocks real resume points and
-  automatic watched-marking
 - mpv control from the TUI (pause/seek/stop) instead of blocking on exit
 - `/PlaybackInfo` negotiation with transcoding fallback
 - Implement the `[playback]` / `[sway]` config sections sketched in

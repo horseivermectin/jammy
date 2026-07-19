@@ -1,5 +1,7 @@
-use crate::jellyfin::models::{AuthRequest, AuthResponse, Item, ItemsResponse, View};
-use anyhow::{anyhow, Result};
+use crate::jellyfin::models::{
+    AuthRequest, AuthResponse, Item, ItemsResponse, PlaybackReport, View,
+};
+use anyhow::{anyhow, Context, Result};
 
 const CLIENT_NAME: &str = "jellyfin-tui";
 const DEVICE_NAME: &str = "rust-tui";
@@ -200,7 +202,10 @@ impl JellyfinClient {
     /// something we build ourselves out of a generic PATCH.
     pub async fn mark_played(&self, item_id: &str) -> Result<()> {
         let (token, user_id) = self.require_auth()?;
-        let url = format!("{}/Users/{}/PlayedItems/{}", self.server_url, user_id, item_id);
+        let url = format!(
+            "{}/Users/{}/PlayedItems/{}",
+            self.server_url, user_id, item_id
+        );
 
         let resp = self
             .http
@@ -221,7 +226,10 @@ impl JellyfinClient {
     /// Marks an item unwatched (same endpoint, DELETE instead of POST).
     pub async fn mark_unplayed(&self, item_id: &str) -> Result<()> {
         let (token, user_id) = self.require_auth()?;
-        let url = format!("{}/Users/{}/PlayedItems/{}", self.server_url, user_id, item_id);
+        let url = format!(
+            "{}/Users/{}/PlayedItems/{}",
+            self.server_url, user_id, item_id
+        );
 
         let resp = self
             .http
@@ -233,6 +241,67 @@ impl JellyfinClient {
         if !resp.status().is_success() {
             return Err(anyhow!(
                 "marking item unplayed failed: server returned {}",
+                resp.status()
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn report_playback_started(&self, item_id: &str, position_ticks: i64) -> Result<()> {
+        self.report_playback("/Sessions/Playing", item_id, position_ticks, false)
+            .await
+    }
+
+    pub async fn report_playback_progress(
+        &self,
+        item_id: &str,
+        position_ticks: i64,
+        is_paused: bool,
+    ) -> Result<()> {
+        self.report_playback(
+            "/Sessions/Playing/Progress",
+            item_id,
+            position_ticks,
+            is_paused,
+        )
+        .await
+    }
+
+    pub async fn report_playback_stopped(&self, item_id: &str, position_ticks: i64) -> Result<()> {
+        self.report_playback("/Sessions/Playing/Stopped", item_id, position_ticks, false)
+            .await
+    }
+
+    async fn report_playback(
+        &self,
+        endpoint: &str,
+        item_id: &str,
+        position_ticks: i64,
+        is_paused: bool,
+    ) -> Result<()> {
+        let (token, _) = self.require_auth()?;
+        let url = format!("{}{}", self.server_url, endpoint);
+        let report = PlaybackReport {
+            item_id,
+            position_ticks,
+            is_paused,
+            is_muted: false,
+            can_seek: true,
+            play_method: "DirectPlay",
+        };
+
+        let resp = self
+            .http
+            .post(&url)
+            .header("X-Emby-Token", token)
+            .json(&report)
+            .send()
+            .await
+            .with_context(|| format!("reporting playback state to {url}"))?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "reporting playback state to {url} failed: server returned {}",
                 resp.status()
             ));
         }

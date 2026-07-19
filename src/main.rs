@@ -16,6 +16,7 @@ use crossterm::{
 use jellyfin::JellyfinClient;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Write};
+use std::process::ExitStatus;
 use std::time::Duration;
 
 #[tokio::main]
@@ -129,7 +130,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut Ap
                 KeyCode::Down | KeyCode::Char('j') => app.move_subtitle_selection(1),
                 KeyCode::Enter => {
                     if let Some(request) = app.confirm_subtitle_selection() {
-                        app.status = match mpv::play(&request) {
+                        app.status = match play_and_report(app, &request).await {
                             Ok(()) => None,
                             Err(e) => Some(format!("Playback error: {e:#}")),
                         };
@@ -176,7 +177,7 @@ async fn handle_activate(app: &mut App, force_restart: bool, force_subtitle_pick
             // mpv owns its own window (it never touches our tty), so no
             // raw-mode juggling is needed here — just pause this loop
             // until it exits, then keep browsing.
-            app.status = match mpv::play(&request) {
+            app.status = match play_and_report(app, &request).await {
                 Ok(()) => None,
                 Err(e) => Some(format!("Playback error: {e:#}")),
             };
@@ -185,6 +186,62 @@ async fn handle_activate(app: &mut App, force_restart: bool, force_subtitle_pick
         Ok(app::ActivateOutcome::Nothing) => {}
         Err(e) => app.status = Some(format!("Error: {e:#}")),
     }
+}
+
+async fn play_and_report(app: &mut App, request: &app::PlaybackRequest) -> Result<()> {
+    const REPORT_INTERVAL_SECONDS: u64 = 10;
+
+    let mut player = mpv::Player::start(request)?;
+    let mut position_ticks = request.start_seconds.unwrap_or(0) as i64 * 10_000_000;
+    let mut is_paused = false;
+    let mut seconds_since_report = 0;
+    let mut reporting_error = app
+        .report_playback_started(&request.item_id, position_ticks)
+        .await
+        .err();
+
+    let exit_status: ExitStatus = loop {
+        if let Some(status) = player.try_wait()? {
+            break status;
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        if let Some(state) = player.playback_state() {
+            position_ticks = state.position_ticks;
+            is_paused = state.is_paused;
+        }
+
+        seconds_since_report += 1;
+        if seconds_since_report >= REPORT_INTERVAL_SECONDS {
+            reporting_error = app
+                .report_playback_progress(&request.item_id, position_ticks, is_paused)
+                .await
+                .err();
+            seconds_since_report = 0;
+        }
+    };
+
+    if let Err(error) = app
+        .report_playback_stopped(&request.item_id, position_ticks)
+        .await
+    {
+        reporting_error = Some(error);
+    }
+
+    // The server's response is authoritative; re-fetch rather than
+    // manufacturing a local percentage from mpv's position.
+    app.refresh_after_playback().await?;
+
+    if !exit_status.success() {
+        anyhow::bail!("mpv exited with a non-zero status: {exit_status}");
+    }
+    if let Some(error) = reporting_error {
+        return Err(
+            error.context("mpv played, but Jellyfin rejected at least one playback-state report")
+        );
+    }
+
+    Ok(())
 }
 
 fn prompt(label: &str) -> io::Result<String> {

@@ -7,8 +7,8 @@ doubles as the contributor guide.)
 
 **jammy** (cargo package: `jellyfin-tui`) is a terminal-UI client for the
 [Jellyfin](https://jellyfin.org) media server. It browses libraries in the
-terminal and plays media by spawning mpv. Single binary crate, no
-workspace, ~1.4k lines of Rust.
+terminal, plays media by spawning mpv, and reports mpv's playback position
+to Jellyfin. Single binary crate, no workspace, ~1.6k lines of Rust.
 
 Stack: `tokio` + `reqwest` (rustls) for the Jellyfin REST API, `ratatui` +
 `crossterm` for the UI, `serde`/`serde_json` for API models, `anyhow` for
@@ -37,9 +37,8 @@ cargo fmt                       # run before committing
 
 Current baseline (last verified): build + clippy clean apart from two known
 `dead_code` warnings on deserialization-only model fields
-(`JellyfinUser::name`, `ItemsResponse::total_record_count`); 5/5 tests
-pass; `cargo fmt --check` reports diffs — leaving the tree rustfmt-clean is
-welcome.
+(`JellyfinUser::name`, `ItemsResponse::total_record_count`); 7/7 tests pass;
+`cargo fmt --check` is clean.
 
 ## Toolchain constraints (important)
 
@@ -63,7 +62,7 @@ principled MSRV.
 | `src/jellyfin/client.rs` | `JellyfinClient`: auth, `/Users/{id}/Views`, `/Items`, item details, played/unplayed, stream-URL building |
 | `src/jellyfin/models.rs` | serde models of Jellyfin JSON — only fields the app actually reads — plus the deserialization tests |
 | `src/ui.rs` | Rendering only: draws from `App` state, owns no behavior |
-| `src/mpv.rs` | Builds and spawns the (blocking) mpv command; no IPC yet |
+| `src/mpv.rs` | Spawns mpv, owns its private Unix IPC socket, and samples playback position/pause state |
 | `src/config.rs` | `config.toml` load/save, device-id generation, the aspirational `config.example.toml` text |
 | `src/subtitle_prefs.rs` | Per-item subtitle memory (JSON in the XDG data dir) |
 
@@ -81,7 +80,12 @@ Key handling stays in `main.rs`; state transitions stay in `app.rs`;
     `MediaStream.Index` is container-wide. `app.rs` maps ordinal → sid at
     play time; `subtitle_prefs` persists the *absolute* index because it's
     the stable one.
-  - Jellyfin ticks are 100ns units; `MIN_RESUME_TICKS` is 10s.
+- Jellyfin ticks are 100ns units; `MIN_RESUME_TICKS` is 10s.
+- mpv reports `time-pos` in seconds; `mpv.rs` converts it to Jellyfin's
+  100ns ticks. `main.rs` posts progress every 10s and once on exit.
+- Jellyfin may discard a valid reported position outside its server-side
+  `MinResumePct`/`MaxResumePct` window. Tests below the minimum can advance
+  `PlayCount`/`LastPlayedDate` while leaving `PlaybackPositionTicks` at zero.
   - `restore_session()` does not validate the token; `main.rs` treats the
     first real request (`get_views` in `App::new`) as the validity check
     and falls back to a fresh login.
@@ -105,9 +109,11 @@ Key handling stays in `main.rs`; state transitions stay in `app.rs`;
   remembered-preference resolution) should be **extracted into pure
   functions** and unit-tested — much of it is currently embedded in
   `App` methods and untestable.
-- Manual smoke test before a PR: browse into a library → play an item →
-  use the subtitle picker → toggle watched → quit and relaunch (session
-  restore) → revoke token server-side and relaunch (re-login path).
+- Manual smoke test before a PR: browse into a library → play an item for
+  at least 10s → quit mpv → confirm the percentage updates → play it again
+  and confirm resume → use the subtitle picker → toggle watched → quit and
+  relaunch (session restore) → revoke token server-side and relaunch
+  (re-login path).
 
 ## Commit / PR guidance
 

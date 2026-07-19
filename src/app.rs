@@ -17,7 +17,11 @@ pub struct Entry {
     pub id: String,
     pub name: String,
     pub is_folder: bool,
-    pub kind_label: String,
+    /// Jellyfin's raw semantic type (Movie, Episode, Series, ...). It is
+    /// deliberately not rendered beside every title, but retaining it here
+    /// lets future filters distinguish content without guessing from names.
+    #[allow(dead_code)]
+    pub item_type: Option<String>,
     /// Watch state. Always `false`/`None` for folders — Jellyfin doesn't
     /// really track "watched" on a folder the way it does on a video.
     pub played: bool,
@@ -48,6 +52,7 @@ pub struct SubtitleOption {
 /// Everything needed to actually launch mpv, gathered by activate() before
 /// handing control back to main.rs.
 pub struct PlaybackRequest {
+    pub item_id: String,
     pub url: String,
     pub title: String,
     pub start_seconds: Option<u64>,
@@ -141,7 +146,7 @@ impl App {
                         id: v.id,
                         name: v.name,
                         is_folder: true,
-                        kind_label: v.collection_type.unwrap_or_else(|| "unknown type".to_string()),
+                        item_type: v.collection_type,
                         played: false,
                         played_percentage: None,
                         playback_position_ticks: None,
@@ -164,7 +169,7 @@ impl App {
                             id: it.id,
                             name: it.name,
                             is_folder: it.is_folder,
-                            kind_label: it.item_type,
+                            item_type: Some(it.item_type),
                             played,
                             played_percentage,
                             playback_position_ticks,
@@ -179,7 +184,11 @@ impl App {
         } else {
             None
         }
-        .or(if self.entries.is_empty() { None } else { Some(0) });
+        .or(if self.entries.is_empty() {
+            None
+        } else {
+            Some(0)
+        });
 
         self.list_state.select(selection);
         Ok(())
@@ -248,6 +257,7 @@ impl App {
 
         if subtitle_streams.is_empty() {
             return Ok(ActivateOutcome::Play(PlaybackRequest {
+                item_id,
                 url,
                 title,
                 start_seconds,
@@ -261,6 +271,7 @@ impl App {
                     // Remembered as off.
                     None => {
                         return Ok(ActivateOutcome::Play(PlaybackRequest {
+                            item_id,
                             url,
                             title,
                             start_seconds,
@@ -277,6 +288,7 @@ impl App {
                             .position(|s| s.index == absolute_index)
                         {
                             return Ok(ActivateOutcome::Play(PlaybackRequest {
+                                item_id,
                                 url,
                                 title,
                                 start_seconds,
@@ -314,7 +326,10 @@ impl App {
             });
         }
 
-        let default_selected = options.iter().position(|o| o.is_default_choice).unwrap_or(0);
+        let default_selected = options
+            .iter()
+            .position(|o| o.is_default_choice)
+            .unwrap_or(0);
         let mut list_state = ListState::default();
         list_state.select(Some(default_selected));
 
@@ -333,7 +348,9 @@ impl App {
     /// that mode.
     pub fn move_subtitle_selection(&mut self, delta: isize) {
         if let Mode::SelectingSubtitle {
-            options, list_state, ..
+            options,
+            list_state,
+            ..
         } = &mut self.mode
         {
             if options.is_empty() {
@@ -370,6 +387,7 @@ impl App {
                 }
 
                 Some(PlaybackRequest {
+                    item_id,
                     url,
                     title,
                     start_seconds,
@@ -430,5 +448,32 @@ impl App {
             if now_played { "watched" } else { "unwatched" }
         ));
         Ok(())
+    }
+
+    pub async fn report_playback_started(&self, item_id: &str, position_ticks: i64) -> Result<()> {
+        self.client
+            .report_playback_started(item_id, position_ticks)
+            .await
+    }
+
+    pub async fn report_playback_progress(
+        &self,
+        item_id: &str,
+        position_ticks: i64,
+        is_paused: bool,
+    ) -> Result<()> {
+        self.client
+            .report_playback_progress(item_id, position_ticks, is_paused)
+            .await
+    }
+
+    pub async fn report_playback_stopped(&self, item_id: &str, position_ticks: i64) -> Result<()> {
+        self.client
+            .report_playback_stopped(item_id, position_ticks)
+            .await
+    }
+
+    pub async fn refresh_after_playback(&mut self) -> Result<()> {
+        self.refresh(true).await
     }
 }

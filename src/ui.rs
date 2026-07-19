@@ -16,15 +16,28 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let breadcrumb = app.breadcrumb();
 
     match &mut app.mode {
-        Mode::Browsing => draw_browser(frame, chunks[0], &app.entries, &mut app.list_state, &breadcrumb),
+        Mode::Browsing => draw_browser(
+            frame,
+            chunks[0],
+            &app.entries,
+            &mut app.list_state,
+            &breadcrumb,
+        ),
         Mode::SelectingSubtitle {
             options,
             list_state,
             ..
         } => {
-            let items: Vec<ListItem> = options.iter().map(|o| ListItem::new(o.label.clone())).collect();
+            let items: Vec<ListItem> = options
+                .iter()
+                .map(|o| ListItem::new(o.label.clone()))
+                .collect();
             let list = List::new(items)
-                .block(Block::default().borders(Borders::ALL).title("Choose subtitles"))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Choose subtitles"),
+                )
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol("> ");
             frame.render_stateful_widget(list, chunks[0], list_state);
@@ -68,15 +81,16 @@ fn draw_browser(
             };
 
             let folder_marker = if entry.is_folder { "/" } else { " " };
-            ListItem::new(format!(
-                "{watched_marker} {}{folder_marker}  [{}]",
-                entry.name, entry.kind_label
-            ))
+            ListItem::new(format!("{watched_marker} {}{folder_marker}", entry.name))
         })
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(breadcrumb.to_string()))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(breadcrumb.to_string()),
+        )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("> ");
 
