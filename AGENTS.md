@@ -37,7 +37,7 @@ cargo fmt                       # run before committing
 
 Current baseline (last verified): build + clippy clean apart from two known
 `dead_code` warnings on deserialization-only model fields
-(`JellyfinUser::name`, `ItemsResponse::total_record_count`); 7/7 tests pass;
+(`JellyfinUser::name`, `ItemsResponse::total_record_count`); 8/8 tests pass;
 `cargo fmt --check` is clean.
 
 ## Toolchain constraints (important)

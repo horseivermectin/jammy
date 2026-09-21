@@ -35,6 +35,10 @@ pub struct Entry {
 struct Level {
     title: String,
     parent_id: Option<String>,
+    /// Set only when this level is a top-level Jellyfin library. TV and
+    /// movie libraries need a logical recursive query at their root; once
+    /// inside a Series/Movie/Season, ordinary direct-child browsing resumes.
+    collection_type: Option<String>,
 }
 
 /// One choice on the subtitle-selection screen.
@@ -106,6 +110,7 @@ impl App {
             stack: vec![Level {
                 title: "Libraries".to_string(),
                 parent_id: None,
+                collection_type: None,
             }],
             entries: Vec::new(),
             list_state: ListState::default(),
@@ -154,7 +159,10 @@ impl App {
                     .collect()
             }
             Some(parent_id) => {
-                let items = self.client.get_items(parent_id).await?;
+                let items = self
+                    .client
+                    .get_items(parent_id, level.collection_type.as_deref())
+                    .await?;
                 items
                     .into_iter()
                     .map(|it| {
@@ -226,9 +234,15 @@ impl App {
         if entry.is_folder {
             let title = entry.name.clone();
             let id = entry.id.clone();
+            // CollectionType appears on top-level Views; ordinary folder
+            // items carry semantic types such as Series and Season instead.
+            let collection_type = (self.stack.len() == 1)
+                .then(|| entry.item_type.clone())
+                .flatten();
             self.stack.push(Level {
                 title,
                 parent_id: Some(id),
+                collection_type,
             });
             self.refresh(false).await?;
             return Ok(ActivateOutcome::Nothing);

@@ -115,7 +115,17 @@ impl JellyfinClient {
 
     /// Fetches what's inside a given library or folder (pass a View's id, or
     /// a folder Item's id to go one level deeper).
-    pub async fn get_items(&self, parent_id: &str) -> Result<Vec<Item>> {
+    ///
+    /// Jellyfin's TV and movie views are logical collections, not physical
+    /// folders. At those library roots, asking only for direct children leaks
+    /// loose episodes and release directories into the UI. Request the
+    /// canonical recursive item type there; below the library root, preserve
+    /// the normal Series -> Season -> Episode hierarchy with direct children.
+    pub async fn get_items(
+        &self,
+        parent_id: &str,
+        collection_type: Option<&str>,
+    ) -> Result<Vec<Item>> {
         let token = self
             .access_token
             .as_ref()
@@ -127,15 +137,21 @@ impl JellyfinClient {
 
         let url = format!("{}/Items", self.server_url);
 
+        let mut query = vec![
+            ("ParentId", parent_id),
+            ("UserId", user_id.as_str()),
+            ("Fields", "UserData"),
+        ];
+        if let Some(item_type) = logical_library_item_type(collection_type) {
+            query.push(("Recursive", "true"));
+            query.push(("IncludeItemTypes", item_type));
+        }
+
         let resp = self
             .http
             .get(&url)
             .header("X-Emby-Token", token)
-            .query(&[
-                ("ParentId", parent_id),
-                ("UserId", user_id.as_str()),
-                ("Fields", "UserData"),
-            ])
+            .query(&query)
             .send()
             .await?;
 
@@ -321,5 +337,29 @@ impl JellyfinClient {
             .as_deref()
             .ok_or_else(|| anyhow!("not authenticated yet — call authenticate() first"))?;
         Ok((token, user_id))
+    }
+}
+
+/// The semantic item type Jellyfin clients should request at a logical
+/// library root. Other collection types (notably home videos) retain their
+/// physical folder hierarchy and therefore use the direct-children query.
+fn logical_library_item_type(collection_type: Option<&str>) -> Option<&'static str> {
+    match collection_type {
+        Some("tvshows") => Some("Series"),
+        Some("movies") => Some("Movie"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::logical_library_item_type;
+
+    #[test]
+    fn logical_library_roots_map_to_canonical_item_types() {
+        assert_eq!(logical_library_item_type(Some("tvshows")), Some("Series"));
+        assert_eq!(logical_library_item_type(Some("movies")), Some("Movie"));
+        assert_eq!(logical_library_item_type(Some("homevideos")), None);
+        assert_eq!(logical_library_item_type(None), None);
     }
 }
