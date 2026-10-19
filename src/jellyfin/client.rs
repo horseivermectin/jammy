@@ -45,12 +45,17 @@ impl JellyfinClient {
 
     /// Jellyfin wants this header on every request so it knows which client
     /// is talking to it. Before login it's the *only* form of identification
-    /// (there's no token yet); after login we additionally send X-Emby-Token.
-    fn auth_header_value(&self) -> String {
+    /// (there's no token yet); authenticated requests include Token here.
+    /// Jellyfin 12 disables the legacy X-Emby-* headers.
+    fn auth_header_value(&self, token: Option<&str>) -> String {
         let device_id = &self.device_id;
-        format!(
+        let mut value = format!(
             r#"MediaBrowser Client="{CLIENT_NAME}", Device="{DEVICE_NAME}", DeviceId="{device_id}", Version="{CLIENT_VERSION}""#
-        )
+        );
+        if let Some(token) = token {
+            value.push_str(&format!(r#", Token="{token}""#));
+        }
+        value
     }
 
     /// Logs in and stores the access token + user id for subsequent calls.
@@ -60,7 +65,7 @@ impl JellyfinClient {
         let resp = self
             .http
             .post(&url)
-            .header("X-Emby-Authorization", self.auth_header_value())
+            .header(reqwest::header::AUTHORIZATION, self.auth_header_value(None))
             .json(&AuthRequest {
                 username: username.to_string(),
                 password: password.to_string(),
@@ -98,17 +103,15 @@ impl JellyfinClient {
         let resp = self
             .http
             .get(&url)
-            .header("X-Emby-Token", token)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                self.auth_header_value(Some(token)),
+            )
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            return Err(anyhow!(
-                "fetching views failed: server returned {}",
-                resp.status()
-            ));
-        }
-
+        // Preserve the HTTP status so startup only re-prompts on a rejected token.
+        let resp = resp.error_for_status().context("fetching views failed")?;
         let body: ItemsResponse<View> = resp.json().await?;
         Ok(body.items)
     }
@@ -150,7 +153,10 @@ impl JellyfinClient {
         let resp = self
             .http
             .get(&url)
-            .header("X-Emby-Token", token)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                self.auth_header_value(Some(token)),
+            )
             .query(&query)
             .send()
             .await?;
@@ -183,7 +189,7 @@ impl JellyfinClient {
             .ok_or_else(|| anyhow!("not authenticated yet — call authenticate() first"))?;
 
         Ok(format!(
-            "{}/Videos/{}/stream?static=true&api_key={}",
+            "{}/Videos/{}/stream?static=true&ApiKey={}",
             self.server_url, item_id, token
         ))
     }
@@ -199,7 +205,10 @@ impl JellyfinClient {
         let resp = self
             .http
             .get(&url)
-            .header("X-Emby-Token", token)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                self.auth_header_value(Some(token)),
+            )
             .query(&[("Fields", "MediaStreams")])
             .send()
             .await?;
@@ -226,7 +235,10 @@ impl JellyfinClient {
         let resp = self
             .http
             .post(&url)
-            .header("X-Emby-Token", token)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                self.auth_header_value(Some(token)),
+            )
             .send()
             .await?;
 
@@ -250,7 +262,10 @@ impl JellyfinClient {
         let resp = self
             .http
             .delete(&url)
-            .header("X-Emby-Token", token)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                self.auth_header_value(Some(token)),
+            )
             .send()
             .await?;
 
@@ -309,7 +324,10 @@ impl JellyfinClient {
         let resp = self
             .http
             .post(&url)
-            .header("X-Emby-Token", token)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                self.auth_header_value(Some(token)),
+            )
             .json(&report)
             .send()
             .await
@@ -353,7 +371,41 @@ fn logical_library_item_type(collection_type: Option<&str>) -> Option<&'static s
 
 #[cfg(test)]
 mod tests {
-    use super::logical_library_item_type;
+    use super::{logical_library_item_type, JellyfinClient};
+
+    #[test]
+    fn authorization_supports_login_and_saved_sessions() {
+        let mut client = JellyfinClient::new("http://localhost:8096", "test-device");
+        let login = client.auth_header_value(None);
+        assert!(login.starts_with("MediaBrowser "));
+        assert!(login.contains(r#"DeviceId="test-device""#));
+        assert!(!login.contains("Token="));
+
+        client.restore_session("saved-token".into(), "test-user".into());
+        let (token, _) = client.require_auth().unwrap();
+        let header = client.auth_header_value(Some(token));
+        assert_eq!(header, format!(r#"{login}, Token="saved-token""#));
+        let request = client
+            .http
+            .get("http://localhost:8096/Users/test-user/Views")
+            .header(reqwest::header::AUTHORIZATION, header.clone())
+            .build()
+            .unwrap();
+        assert_eq!(request.headers()[reqwest::header::AUTHORIZATION], header);
+    }
+
+    #[test]
+    fn playback_uses_case_sensitive_supported_api_key_parameter() {
+        let mut client = JellyfinClient::new("http://localhost:8096", "test-device");
+        assert!(client.stream_url("item").is_err());
+        client.restore_session("saved-token".into(), "test-user".into());
+        let url = reqwest::Url::parse(&client.stream_url("item").unwrap()).unwrap();
+        let params: Vec<_> = url.query_pairs().collect();
+        assert!(params
+            .iter()
+            .any(|(key, value)| key == "ApiKey" && value == "saved-token"));
+        assert!(!params.iter().any(|(key, _)| key == "api_key"));
+    }
 
     #[test]
     fn logical_library_roots_map_to_canonical_item_types() {

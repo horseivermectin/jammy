@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
     // Try a saved session first — restore_session() just sets the fields,
     // it doesn't confirm the token still works, so we treat the very first
     // real request (get_views, inside App::new) as the actual validity
-    // check and fall back to a fresh login if it fails.
+    // check and fall back to a fresh login only on HTTP 401.
     let have_saved_session = match (&config.server.access_token, &config.server.user_id) {
         (Some(token), Some(user_id)) => {
             client.restore_session(token.clone(), user_id.clone());
@@ -55,9 +55,13 @@ async fn main() -> Result<()> {
     let mut app = if have_saved_session {
         match App::new(client).await {
             Ok(app) => app,
-            Err(_) => {
-                // Saved token didn't work (revoked, expired, wrong server
-                // since saved, ...) — fall through to a fresh login below.
+            Err(error)
+                if error
+                    .downcast_ref::<reqwest::Error>()
+                    .and_then(reqwest::Error::status)
+                    == Some(reqwest::StatusCode::UNAUTHORIZED) =>
+            {
+                // The server rejected the saved token; request fresh credentials.
                 let mut client = JellyfinClient::new(
                     config.server.url.clone().unwrap(),
                     config.server.device_id.clone().unwrap(),
@@ -65,6 +69,7 @@ async fn main() -> Result<()> {
                 login_and_save(&mut client, &mut config).await?;
                 App::new(client).await?
             }
+            Err(error) => return Err(error),
         }
     } else {
         login_and_save(&mut client, &mut config).await?;

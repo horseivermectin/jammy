@@ -88,14 +88,14 @@ Key handling stays in `main.rs`; state transitions stay in `app.rs`;
   `PlayCount`/`LastPlayedDate` while leaving `PlaybackPositionTicks` at zero.
   - `restore_session()` does not validate the token; `main.rs` treats the
     first real request (`get_views` in `App::new`) as the validity check
-    and falls back to a fresh login.
+    and falls back to a fresh login only on HTTP 401.
 - **State machines as enums**, not parallel `Option`/`bool` fields — see
   `Mode`. Illegal states should remain unrepresentable.
 - **Terminal hygiene:** raw mode / alternate screen must be restored on
   *every* exit path, including errors. If you add code that can panic
   inside the TUI, install a panic hook that restores the terminal first.
 - **Secrets:** never log the access token or password. The token currently
-  appears in mpv's command line (`api_key=` in the stream URL) — a known
+  appears in mpv's command line (`ApiKey=` in the stream URL) — a known
   limitation; don't make it worse (e.g. don't start echoing URLs).
 - **Dependencies:** the tree is intentionally small. New deps need a stated
   reason in the PR.

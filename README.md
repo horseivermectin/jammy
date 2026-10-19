@@ -62,8 +62,13 @@ On first run you'll be prompted for:
 
 After a successful login the password is discarded and a revocable access
 token is saved instead. Later launches go straight to your libraries; if the
-saved token stops working (revoked, expired), you'll simply be asked to log
+server rejects the saved token (HTTP 401), you'll simply be asked to log
 in again.
+
+Authentication uses the standard `Authorization: MediaBrowser` header and
+`ApiKey` playback parameter, compatible with Jellyfin 12 without legacy
+authorization. Connection errors and other server failures are reported rather
+than triggering another login prompt.
 
 > **Note:** if you point jammy at a server over plain `http://` on a network
 > you don't control, your credentials and token travel unencrypted. Prefer
